@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"time"
 
 	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -25,6 +26,7 @@ import (
 const ConfigMapName = "mesh-map"
 const enabled = "enabled"
 const MeshSelector = "meshed"
+const MeshTimeout = "mesh-timeout"
 
 func newConf(ns string, cfg string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
@@ -83,9 +85,10 @@ type MeshConfReconciler struct {
 }
 
 type ServiceMeta struct {
-	Name string `json:"name"`
-	Ip   string `json:"ip"`
-	Port int32  `json:"port"`
+	Name           string `json:"name"`
+	Ip             string `json:"ip"`
+	Port           int32  `json:"port"`
+	ConnectTimeout string `json:"timeout"`
 }
 
 func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -109,10 +112,15 @@ func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		if s.Spec.ClusterIP == "" || len(s.Spec.Ports) == 0 {
 			continue
 		}
+		timeout, err := time.ParseDuration(s.Annotations[MeshTimeout])
+		if err != nil {
+			return reconcile.Result{}, err
+		}
 		srvs = append(srvs, ServiceMeta{
-			Name: s.Name,
-			Ip:   s.Spec.ClusterIP,
-			Port: s.Spec.Ports[0].Port,
+			Name:           s.Name,
+			Ip:             s.Spec.ClusterIP,
+			Port:           s.Spec.Ports[0].Port,
+			ConnectTimeout: timeout.String(),
 		})
 	}
 	sort.SliceStable(srvs, func(i, j int) bool {
@@ -153,7 +161,8 @@ func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 
 func compareConf(cmp1, cmp2 []ServiceMeta) bool {
 	for i := 0; i < len(cmp1); i++ {
-		if cmp1[i].Ip != cmp2[i].Ip || cmp1[i].Port != cmp2[i].Port || cmp1[i].Name != cmp2[i].Name {
+		if cmp1[i].Ip != cmp2[i].Ip || cmp1[i].Port != cmp2[i].Port ||
+			cmp1[i].Name != cmp2[i].Name || cmp1[i].ConnectTimeout != cmp2[i].ConnectTimeout {
 			return false
 		}
 	}
