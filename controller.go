@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"sort"
+
 	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -97,6 +98,12 @@ func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 		return reconcile.Result{}, err
 	}
 
+	meshConfig := &corev1.ConfigMap{}
+	err = a.Get(ctx, req.NamespacedName, meshConfig)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
 	var srvs []ServiceMeta
 	for _, s := range services.Items {
 		if s.Spec.ClusterIP == "" || len(s.Spec.Ports) == 0 {
@@ -111,6 +118,19 @@ func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 	sort.SliceStable(srvs, func(i, j int) bool {
 		return srvs[i].Name < srvs[j].Name
 	})
+
+	originConfig := []ServiceMeta{}
+	err = json.Unmarshal([]byte(meshConfig.Data["config"]), &originConfig)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	sort.SliceStable(originConfig, func(i, j int) bool {
+		return originConfig[i].Name < originConfig[j].Name
+	})
+	if compareConf(originConfig, srvs) {
+		log.Info("skip configmap update")
+		return reconcile.Result{}, nil
+	}
 
 	data, err := json.MarshalIndent(srvs, "", "  ")
 	if err != nil {
@@ -129,4 +149,13 @@ func (a *MeshConfReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 
 	log.Info("updated config map")
 	return reconcile.Result{}, nil
+}
+
+func compareConf(cmp1, cmp2 []ServiceMeta) bool {
+	for i := 0; i < len(cmp1); i++ {
+		if cmp1[i].Ip != cmp2[i].Ip || cmp1[i].Port != cmp2[i].Port || cmp1[i].Name != cmp2[i].Name {
+			return false
+		}
+	}
+	return true
 }
